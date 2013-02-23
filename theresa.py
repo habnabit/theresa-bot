@@ -227,7 +227,8 @@ class TheresaProtocol(_IRCBase):
     def command_twat(self, channel, user):
         return (self.factory.twatter
                 .request('statuses/user_timeline.json',
-                         screen_name=user, count='1', include_rts='true', include_entities='true')
+                         screen_name=user, count='1', include_entities='true',
+                         include_rts='true', exclude_replies='true')
                 .addCallback(operator.itemgetter(0))
                 .addCallback(self.formatTwat)
                 .addCallback(self.messageChannels, [channel]))
