@@ -9,10 +9,10 @@ from twisted.application import internet, service
 from twisted.web.client import Agent, HTTPConnectionPool
 from twisted.internet import reactor
 from twisted.python import log
-from oauth import oauth
+import oauth2
 
-consumer = oauth.OAuthConsumer('...', '...')
-token = oauth.OAuthToken('...', '...')
+consumer = oauth2.Consumer('...', '...')
+token = oauth2.Token('...', '...')
 
 class Theresa(theresa.TheresaProtocol):
     nickname = 'theresa'

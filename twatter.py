@@ -10,7 +10,7 @@ from twisted.web.client import ResponseDone
 from twisted.web.http import PotentialDataLoss
 from twisted.internet import defer
 from twisted.python import log
-from oauth import oauth
+import oauth2
 
 import urlparse
 import theresa
@@ -18,7 +18,7 @@ import urllib
 import json
 import re
 
-defaultSignature = oauth.OAuthSignatureMethod_HMAC_SHA1()
+defaultSignature = oauth2.SignatureMethod_HMAC_SHA1()
 defaultTwitterAPI = 'https://api.twitter.com/1.1/'
 defaultStreamingAPI = 'https://userstream.twitter.com/1.1/'
 
@@ -49,12 +49,13 @@ class OAuthAgent(object):
         if parameters is None:
             parameters = {}
         if addAuthHeader:
-            req = oauth.OAuthRequest.from_consumer_and_token(
+            req = oauth2.Request.from_consumer_and_token(
                 self.consumer, token=self.token,
                 http_method=method, http_url=uri, parameters=parameters)
             req.sign_request(self.signatureMethod, self.consumer, self.token)
             for header, value in req.to_header().iteritems():
-                headers.addRawHeader(header, value)
+                # oauth2, for some bozotic reason, gives unicode header values
+                headers.addRawHeader(header, value.encode())
         parsed = urlparse.urlparse(uri)
         uri = urlparse.urlunparse(parsed._replace(query=urllib.urlencode(parameters)))
         return self.agent.request(method, uri, headers, bodyProducer)
