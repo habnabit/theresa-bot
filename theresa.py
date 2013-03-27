@@ -201,8 +201,16 @@ class TheresaProtocol(_IRCBase):
                 self.msg(channel, result)
         return d
 
+    def personallyAddressed(self, user, channel, message):
+        pass
+
     def privmsg(self, user, channel, message):
         if not channel.startswith('#'):
+            return
+
+        addressedMatch = re.match(r'(?i)^s*%s\s*[,:> ]+(\S?.*?)[.!?]?\s*$' % (re.escape(self.nickname),), message)
+        if addressedMatch:
+            self.personallyAddressed(user, channel, addressedMatch.group(1))
             return
 
         if not message.startswith((',', '!')):
