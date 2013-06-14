@@ -13,6 +13,7 @@ from lxml import html
 import collections
 import traceback
 import operator
+import urlparse
 import twatter
 import shlex
 import cgi
@@ -32,6 +33,7 @@ def c(text, *colors):
  CYAN, VLUE, PINK, GREY, SILVER) = (str(i) for i in range(16))
 
 twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
+gyazo_regexp = re.compile('https?://gyazo\.com/[0-9a-f]+')
 
 class StringReceiver(protocol.Protocol):
     def __init__(self, byteLimit=None):
@@ -95,6 +97,17 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
     if not fullInfo:
         defer.returnValue(None)
     defer.returnValue(' => '.join(results))
+
+@defer.inlineCallbacks
+def gyazoImage(agent, url):
+    resp = yield agent.request('GET', url)
+    if resp.code != 200:
+        log.msg('non-200 (%d) response from %r' % (resp.code, url))
+        return
+    body = yield receive(resp, StringReceiver(16384))
+    doc = html.fromstring(body)
+    image, = doc.xpath('//img[@id="gyazo_img"]/@src')
+    defer.returnValue(urlparse.urljoin(url, image))
 
 urlRegex = re.compile(
     u'(?i)\\b((?:[a-z][\\w-]+:(?:/{1,3}|[a-z0-9%])|www\\d{0,3}[.]|[a-z0-9.\\-]'
@@ -180,6 +193,14 @@ class TheresaProtocol(_IRCBase):
         self._lastURL = url
         return d
 
+    def fetchGyazoImage(self, url):
+        d = gyazoImage(self.factory.agent, url)
+        @d.addCallback
+        def _cb(r):
+            if r is not None:
+                return c(' Gyazo ', WHITE, NAVY) + ' ' + b(escapeControls(r))
+        return d
+
     def scanMessage(self, channel, message):
         scannedDeferreds = []
         for m in urlRegex.finditer(message):
@@ -187,10 +208,13 @@ class TheresaProtocol(_IRCBase):
             twitter_match = twitter_regexp.search(url)
             if twitter_match:
                 scannedDeferreds.append(self.fetchFormattedTwat(twitter_match.group(1)))
-            else:
-                if not url.startswith(('http://', 'https://')):
-                    url = 'http://' + url
-                scannedDeferreds.append(self.fetchURLInfo(url))
+                continue
+            if not url.startswith(('http://', 'https://')):
+                url = 'http://' + url
+            if gyazo_regexp.match(url):
+                scannedDeferreds.append(self.fetchGyazoImage(url))
+                continue
+            scannedDeferreds.append(self.fetchURLInfo(url))
         if not scannedDeferreds:
             return
         d = defer.gatherResults(scannedDeferreds, consumeErrors=True)
