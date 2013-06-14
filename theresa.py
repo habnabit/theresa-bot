@@ -215,6 +215,7 @@ class TheresaProtocol(_IRCBase):
                 scannedDeferreds.append(self.fetchGyazoImage(url))
                 continue
             scannedDeferreds.append(self.fetchURLInfo(url))
+        scannedDeferreds = filter(None, scannedDeferreds)
         if not scannedDeferreds:
             return
         d = defer.gatherResults(scannedDeferreds, consumeErrors=True)
