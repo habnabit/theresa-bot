@@ -8,7 +8,6 @@ import twatter
 from twisted.application import internet, service
 from twisted.web.client import Agent, HTTPConnectionPool
 from twisted.internet import reactor
-from twisted.python import log
 import oauth2
 
 consumer = oauth2.Consumer('...', '...')
@@ -25,10 +24,10 @@ class Theresa(theresa.TheresaProtocol):
 
     def signedOn(self):
         theresa.TheresaProtocol.signedOn(self)
-        self.streamDone = self.factory.twatter.stream('user.json', self.streamDelegate).addErrback(log.err)
+        streamer.addDelegate(self.streamDelegate)
 
     def connectionLost(self, reason):
-        self.streamDone.cancel()
+        streamer.removeDelegate(self.streamDelegate)
 
 class TheresaFactory(theresa.TheresaFactory):
     protocol = Theresa
@@ -37,5 +36,7 @@ application = service.Application("theresa")
 pool = HTTPConnectionPool(reactor)
 agent = Agent(reactor, pool=pool)
 twatterInstance = twatter.Twatter(twatter.OAuthAgent(agent, consumer, token))
+streamer = twatter.StreamPreserver(twatterInstance, 'user.json')
+streamer.setServiceParent(application)
 theresaFac = TheresaFactory(agent, twatterInstance)
 internet.TCPClient('irc.esper.net', 5555, theresaFac).setServiceParent(application)

@@ -2,6 +2,7 @@
 # See COPYING for details.
 
 "I HATE TWITTER"
+from twisted.application.service import Service
 from twisted.protocols.policies import TimeoutMixin
 from twisted.web.http_headers import Headers
 from twisted.protocols.basic import LineOnlyReceiver
@@ -9,7 +10,7 @@ from twisted.internet.error import TimeoutError
 from twisted.web.client import ResponseDone
 from twisted.web.http import PotentialDataLoss
 from twisted.internet import defer
-from twisted.python import log
+from twisted.python import log, failure
 import oauth2
 
 import urlparse
@@ -152,6 +153,59 @@ class Twatter(object):
         d = self._makeRequest(self.streamingAPI, resource, parameters)
         d.addCallback(theresa.receive, TwitterStream(delegate))
         return d
+
+class StreamPreserver(Service):
+    "Keep a stream connected as a service."
+    def __init__(self, twatter, resource, **parameters):
+        self.twatter = twatter
+        self.resource = resource
+        self.parameters = parameters
+        self._streamDone = None
+        self._delegates = set()
+
+    def __repr__(self):
+        return '<StreamPreserver %#x for %r/%r>' % (id(self), self.resource, self.parameters)
+
+    def _connectStream(self, r):
+        if isinstance(r, failure.Failure) and r.check(defer.CancelledError):
+            log.msg('not reconnecting twitter stream %r' % self)
+            return
+        log.msg('reconnecting twitter stream %r' % self)
+        d = self._streamDone = self.twatter.stream(self.resource, self._streamDelegate, **self.parameters)
+        d.addBoth(self._connectStream)
+        d.addErrback(log.err, 'error reading from twitter stream %r' % self)
+        return r
+
+    def _streamDelegate(self, data):
+        for delegate in self._delegates:
+            try:
+                delegate(data)
+            except Exception:
+                log.err('error calling delegate %r' % (delegate,))
+
+    def addDelegate(self, delegate):
+        "Add a delegate to receive stream data."
+        self._delegates.add(delegate)
+
+    def removeDelegate(self, delegate):
+        "Remove a previously-added stream data delegate."
+        self._delegates.discard(delegate)
+
+    def startService(self):
+        "Start reading from the stream."
+        if not self.running:
+            self._connectStream(None)
+        Service.startService(self)
+
+    def stopService(self):
+        "Stop reading from the stream."
+        ret = None
+        if self.running and self._streamDone is not None:
+            self._streamDone.cancel()
+            ret = self._streamDone
+        Service.startService(self)
+        return ret
+
 
 entityReplacements = [
     ('media', 'media_url_https'),
