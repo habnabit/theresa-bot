@@ -110,10 +110,8 @@ def gyazoImage(agent, url):
     defer.returnValue(urlparse.urljoin(url, image))
 
 urlRegex = re.compile(
-    u'(?i)\\b((?:[a-z][\\w-]+:(?:/{1,3}|[a-z0-9%])|www\\d{0,3}[.]|[a-z0-9.\\-]'
-    u'+[.][a-z]{2,4}/)(?:[^\\s()<>]+|\\(([^\\s()<>]+|(\\([^\\s()<>]+\\)))*\\))'
-    u'+(?:\\(([^\\s()<>]+|(\\([^\\s()<>]+\\)))*\\)|[^\\s`!()\\[\\]{};:\'".,<>?'
-    u'\xab\xbb\u201c\u201d\u2018\u2019]))'
+    u'(?isu)(\\b(?:https?://|www\\d{0,3}[.]|[a-z0-9.\\-]+[.][a-z]{2,4}/)[^\\s()<'
+    u'>\\[\\]]+[^\\s`!()\\[\\]{};:\'".,<>?\xab\xbb\u201c\u201d\u2018\u2019])'
 )
 
 class _IRCBase(irc.IRCClient):
