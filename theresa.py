@@ -155,6 +155,7 @@ class _IRCBase(irc.IRCClient):
 
 class TheresaProtocol(_IRCBase):
     _lastURL = None
+    lastTwatID = None
     channel = None
     channels = None
 
@@ -172,6 +173,7 @@ class TheresaProtocol(_IRCBase):
         _IRCBase.signedOn(self)
 
     def formatTwat(self, twat):
+        self.lastTwatID = twat['id']
         return ' '.join([
                 c(' Twitter ', WHITE, CYAN),
                 b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
@@ -296,6 +298,26 @@ class TheresaProtocol(_IRCBase):
         return (self.factory.twatter
                 .request('statuses/destroy/%s.json' % (id,), 'POST')
                 .addCallback(self._extractPostData, 'deleted')
+                .addCallback(self.messageChannels, [channel]))
+
+    def command_retwat(self, channel, id=None):
+        if id is None:
+            id = self.lastTwatID
+        if id is None:
+            raise ValueError('nothing to retwat')
+        return (self.factory.twatter
+                .request('statuses/retweet/%s.json' % (id,), 'POST')
+                .addCallback(self._extractPostData, 'retweeted as')
+                .addCallback(self.messageChannels, [channel]))
+
+    def command_reply(self, channel, *content):
+        content = ' '.join(content).decode('utf-8', 'replace')
+        if self.lastTwatID is None:
+            raise ValueError('nothing to reply to')
+        return (self.factory.twatter
+                .request('statuses/update.json', 'POST',
+                         status=content, in_reply_to_status_id=self.lastTwatID)
+                .addCallback(self._extractPostData, 'replied as')
                 .addCallback(self.messageChannels, [channel]))
 
     def command_url(self, channel, url=None):
