@@ -282,6 +282,22 @@ class TheresaProtocol(_IRCBase):
                 .addCallback(self._extractFollowing)
                 .addCallback(self.messageChannels, [channel]))
 
+    def _extractPostData(self, data, preamble):
+        return ('%s twat ID %s' % (preamble, data['id'])).encode('utf-8')
+
+    def command_poast(self, channel, *content):
+        content = ' '.join(content).decode('utf-8', 'replace')
+        return (self.factory.twatter
+                .request('statuses/update.json', 'POST', status=content)
+                .addCallback(self._extractPostData, 'posted as')
+                .addCallback(self.messageChannels, [channel]))
+
+    def command_unpoast(self, channel, id):
+        return (self.factory.twatter
+                .request('statuses/destroy/%s.json' % (id,), 'POST')
+                .addCallback(self._extractPostData, 'deleted')
+                .addCallback(self.messageChannels, [channel]))
+
     def command_url(self, channel, url=None):
         if url is None:
             url = self._lastURL
