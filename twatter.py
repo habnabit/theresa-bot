@@ -123,12 +123,12 @@ class Twatter(object):
         self.twitterAPI = twitterAPI
         self.streamingAPI = streamingAPI
 
-    def _makeRequest(self, whichAPI, resource, parameters):
-        d = self.agent.request('GET', urlparse.urljoin(whichAPI, resource), parameters=parameters)
+    def _makeRequest(self, whichAPI, method, resource, parameters):
+        d = self.agent.request(method, urlparse.urljoin(whichAPI, resource), parameters=parameters)
         d.addCallback(trapBadStatuses)
         return d
 
-    def request(self, resource, **parameters):
+    def request(self, resource, method='GET', **parameters):
         """Make a GET request from the twitter 1.1 API.
 
         `resource` is the part of the resource URL not including the API URL,
@@ -137,7 +137,7 @@ class Twatter(object):
         arguments will be added to the URL as the query string. The `Deferred`
         returned will fire with the decoded JSON.
         """
-        d = self._makeRequest(self.twitterAPI, resource, parameters)
+        d = self._makeRequest(self.twitterAPI, method, resource, parameters)
         d.addCallback(theresa.receive, theresa.StringReceiver())
         d.addCallback(json.loads)
         return d
@@ -150,7 +150,7 @@ class Twatter(object):
         received from the stream. The `Deferred` returned will fire when the
         stream has ended.
         """
-        d = self._makeRequest(self.streamingAPI, resource, parameters)
+        d = self._makeRequest(self.streamingAPI, 'GET', resource, parameters)
         d.addCallback(theresa.receive, TwitterStream(delegate))
         return d
 

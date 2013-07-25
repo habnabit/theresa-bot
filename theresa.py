@@ -264,6 +264,24 @@ class TheresaProtocol(_IRCBase):
                 .addCallback(self.formatTwat)
                 .addCallback(self.messageChannels, [channel]))
 
+    command_twit = command_twat
+
+    def _extractFollowing(self, data):
+        return ('following @%(screen_name)s: %(following)s' % data).encode('utf-8')
+
+    def command_follow(self, channel, user):
+        return (self.factory.twatter
+                .request('friendships/create.json', 'POST',
+                         screen_name=user, follow='true')
+                .addCallback(self._extractFollowing)
+                .addCallback(self.messageChannels, [channel]))
+
+    def command_unfollow(self, channel, user):
+        return (self.factory.twatter
+                .request('friendships/destroy.json', 'POST', screen_name=user)
+                .addCallback(self._extractFollowing)
+                .addCallback(self.messageChannels, [channel]))
+
     def command_url(self, channel, url=None):
         if url is None:
             url = self._lastURL
