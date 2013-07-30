@@ -174,6 +174,7 @@ class TheresaProtocol(_IRCBase):
 
     def formatTwat(self, twat):
         self.lastTwatID = twat['id']
+        self.lastTwatUser = twat['user']['screen_name']
         return ' '.join([
                 c(' Twitter ', WHITE, CYAN),
                 b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
@@ -311,9 +312,11 @@ class TheresaProtocol(_IRCBase):
                 .addCallback(self.messageChannels, [channel]))
 
     def command_reply(self, channel, *content):
-        content = ' '.join(content).decode('utf-8', 'replace')
         if self.lastTwatID is None:
             raise ValueError('nothing to reply to')
+        content = ' '.join(content).decode('utf-8', 'replace')
+        if '@' + self.lastTwatUser.lower() not in content.lower():
+            content = '@%s %s' % (self.lastTwatUser, content)
         return (self.factory.twatter
                 .request('statuses/update.json', 'POST',
                          status=content, in_reply_to_status_id=self.lastTwatID)
