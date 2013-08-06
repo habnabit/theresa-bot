@@ -15,7 +15,9 @@ import traceback
 import operator
 import urlparse
 import twatter
+import urllib
 import shlex
+import json
 import cgi
 import re
 
@@ -114,6 +116,11 @@ urlRegex = re.compile(
     u'>\\[\\]]+[^\\s`!()\\[\\]{};:\'".,<>?\xab\xbb\u201c\u201d\u2018\u2019])'
 )
 
+tahoeRegex = re.compile(
+    '(URI:(?:(?:CHK(?:-Verifier)?|DIR2(?:-(?:CHK(?:-Verifier)?|LIT|RO|Verifier'
+    '))?|LIT|SSK(?:-(?:RO|Verifier))?):)[A-Za-z0-9:]+)'
+)
+
 class _IRCBase(irc.IRCClient):
     def ctcpQuery(self, user, channel, messages):
         messages = [(a.upper(), b) for a, b in messages]
@@ -202,6 +209,21 @@ class TheresaProtocol(_IRCBase):
                 return c(' Gyazo ', WHITE, NAVY) + ' ' + b(escapeControls(r))
         return d
 
+    def _formatTahoe(self, data):
+        message = '{0[summary]} across {0[results][count-good-share-hosts]} hosts'.format(data)
+        return c(' Tahoe-LAFS ', WHITE, CYAN) + ' ' + message.encode()
+
+    def _scanTahoe(self, message):
+        if not self.factory.tahoe:
+            return
+        for m in tahoeRegex.finditer(message):
+            d = self.factory.agent.request(
+                'POST', self.factory.tahoe + urllib.quote(m.group()) + '?t=check&output=json')
+            d.addCallback(receive, StringReceiver())
+            d.addCallback(json.loads)
+            d.addCallback(self._formatTahoe)
+            yield d
+
     def scanMessage(self, channel, message):
         scannedDeferreds = []
         for m in urlRegex.finditer(message):
@@ -216,6 +238,7 @@ class TheresaProtocol(_IRCBase):
                 scannedDeferreds.append(self.fetchGyazoImage(url))
                 continue
             scannedDeferreds.append(self.fetchURLInfo(url))
+        scannedDeferreds.extend(self._scanTahoe(message))
         scannedDeferreds = filter(None, scannedDeferreds)
         if not scannedDeferreds:
             return
@@ -332,6 +355,7 @@ class TheresaProtocol(_IRCBase):
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self, agent, twatter):
+    def __init__(self, agent, twatter, tahoe=None):
         self.agent = agent
         self.twatter = twatter
+        self.tahoe = tahoe
