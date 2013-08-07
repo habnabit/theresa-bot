@@ -210,7 +210,14 @@ class TheresaProtocol(_IRCBase):
         return d
 
     def _formatTahoe(self, data):
-        message = '{0[summary]} across {0[results][count-good-share-hosts]} hosts'.format(data)
+        results = data['results']
+        results['healthy'] = 'healthy' if results['healthy'] else 'unhealthy'
+        results['recoverable'] = 'recoverable' if results['recoverable'] else 'unrecoverable'
+        message = (
+            '{0[healthy]}; {0[recoverable]}; {0[count-shares-needed]}-of-'
+            '{0[count-shares-expected]} encoded; {0[count-shares-good]} shares '
+            'available across {0[count-good-share-hosts]} hosts'
+        ).format(results)
         return c(' Tahoe-LAFS ', WHITE, CYAN) + ' ' + message.encode()
 
     def _scanTahoe(self, message):
