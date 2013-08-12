@@ -9,8 +9,10 @@ from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
 from lxml import html
+import magic
 
 import collections
+import mimetypes
 import traceback
 import operator
 import urlparse
@@ -163,31 +165,53 @@ class _IRCBase(irc.IRCClient):
                 users.discard(oldname)
                 users.add(newname)
 
-class HTTPToDCCAdapterProxy(protocol.Protocol):
-    def __init__(self, proto):
-        self.proto = proto
+class TahoeReceiver(protocol.Protocol):
+    def __init__(self):
+        self.proto = None
+        self.buffer = []
+        self.received = 0
+        self.initialDeferred = defer.Deferred()
+        self.done = False
 
     def dataReceived(self, data):
-        self.proto.transport.write(data)
+        if self.proto:
+            self.proto.transport.write(data)
+            return
+        self.buffer.append(data)
+        self.received += len(data)
+        if self.received > 16384:
+            self.transport.pauseProducing()
+            self.initialDeferred.callback(''.join(self.buffer))
+            del self.buffer
 
     def connectionLost(self, reason):
-        self.proto.transport.loseConnection()
+        if self.proto:
+            self.proto.transport.loseConnection()
+        else:
+            self.initialDeferred.callback(''.join(self.buffer))
+        self.done = True
 
 class HTTPToDCCAdapterProtocol(protocol.Protocol):
     def connectionMade(self):
         self.factory.canceler.cancel()
-        self.proxy = HTTPToDCCAdapterProxy(self)
-        self.factory.response.deliverBody(self.proxy)
+        self.transport.write(self.factory.initial)
+        if self.factory.receiver.done:
+            self.transport.loseConnection()
+        else:
+            self.factory.receiver.proto = self
+            self.factory.receiver.transport.resumeProducing()
 
     def connectionLost(self, reason):
-        self.proxy.transport.stopProducing()
+        if not self.factory.receiver.done:
+            self.factory.receiver.transport.stopProducing()
         self.factory.deferred.callback(None)
 
 class HTTPToDCCAdapter(protocol.Factory):
     protocol = HTTPToDCCAdapterProtocol
 
-    def __init__(self, response, reactor):
-        self.response = response
+    def __init__(self, initial, receiver, reactor):
+        self.initial = initial
+        self.receiver = receiver
         self.deferred = defer.Deferred()
         self.canceler = reactor.callLater(60, self.deferred.callback, None)
 
@@ -337,10 +361,14 @@ class TheresaProtocol(_IRCBase):
 
     @defer.inlineCallbacks
     def dccSend(self, resp, nick, size):
-        name = os.urandom(4).encode('hex') + '.dat'  # for now
+        receiver = TahoeReceiver()
+        resp.deliverBody(receiver)
+        initial = yield receiver.initialDeferred
+        ext = mimetypes.guess_extension(magic.from_buffer(initial, mime=True)) or '.dat'
+        name = os.urandom(4).encode('hex') + ext
 
-        log.msg('starting to send to %s' % (nick,))
-        factory = HTTPToDCCAdapter(resp, self.factory.reactor)
+        log.msg('starting to send %s to %s' % (name, nick))
+        factory = HTTPToDCCAdapter(initial, receiver, self.factory.reactor)
         endpoint = endpoints.TCP4ServerEndpoint(self.factory.reactor, 0)
         port = yield endpoint.listen(factory)
 
@@ -350,7 +378,7 @@ class TheresaProtocol(_IRCBase):
 
         yield factory.deferred
         port.stopListening()
-        log.msg('done sending to %s' % (nick,))
+        log.msg('done sending %s to %s' % (name, nick))
 
     @defer.inlineCallbacks
     def command_dongcc(self, channel, user, cap):
