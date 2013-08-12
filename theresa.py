@@ -122,8 +122,8 @@ urlRegex = re.compile(
 )
 
 tahoeRegex = re.compile(
-    '(URI:(?:(?:CHK(?:-Verifier)?|DIR2(?:-(?:CHK(?:-Verifier)?|LIT|RO|Verifier'
-    '))?|LIT|SSK(?:-(?:RO|Verifier))?):)[A-Za-z0-9:]+)'
+    '(URI:(?:(?:CHK|DIR2(?:-MDMF)?(?:-(?:CHK|LIT|RO))?|LIT|(?:SSK|MDMF)(?:-RO)'
+    '?):)[A-Za-z0-9:]+)'
 )
 
 class _IRCBase(irc.IRCClient):
@@ -281,8 +281,9 @@ class TheresaProtocol(_IRCBase):
         if not self.factory.tahoe:
             return
         for m in tahoeRegex.finditer(message):
+            uri = m.group()
             d = self.factory.agent.request(
-                'POST', self.factory.tahoe + urllib.quote(m.group()) + '?t=check&output=json')
+                'POST', self.factory.tahoe + urllib.quote(uri) + '?t=check&output=json')
             d.addCallback(receive, StringReceiver())
             d.addCallback(json.loads)
             d.addCallback(self._formatTahoe)
@@ -303,7 +304,7 @@ class TheresaProtocol(_IRCBase):
                 continue
             scannedDeferreds.append(self.fetchURLInfo(url))
         scannedDeferreds.extend(self._scanTahoe(message))
-        scannedDeferreds = filter(None, scannedDeferreds)
+        scannedDeferreds = [d.addErrback(log.err) for d in scannedDeferreds if d]
         if not scannedDeferreds:
             return
         d = defer.gatherResults(scannedDeferreds, consumeErrors=True)
