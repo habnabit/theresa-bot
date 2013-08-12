@@ -1,3 +1,4 @@
 Twisted
 lxml
 oauth
+python-magic
