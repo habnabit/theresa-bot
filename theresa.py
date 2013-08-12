@@ -2,24 +2,30 @@
 # See COPYING for details.
 
 from twisted.internet.error import ConnectionDone, ConnectionLost
-from twisted.internet import protocol, defer
+from twisted.internet import protocol, defer, reactor
 from twisted.python import log
 from twisted.web.client import ResponseDone, ResponseFailed
 from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
+import magic
 from lxml import html
 
 import collections
 import traceback
 import operator
 import urlparse
+import binascii
 import twatter
 import urllib
+import struct
+import string
+import socket
 import shlex
 import json
 import cgi
 import re
+import os
 
 # dang why doesn't this exist anywhere already
 controlEquivalents = dict((i, unichr(0x2400 + i)) for i in xrange(0x20))
@@ -277,7 +283,10 @@ class TheresaProtocol(_IRCBase):
         command, params = splut[0], splut[1:]
         meth = getattr(self, 'command_%s' % (command.lower(),), None)
         if meth is not None:
-            d = defer.maybeDeferred(meth, channel, *params)
+            if command == 'dongcc':
+                d = defer.maybeDeferred(meth, channel, user, *params)
+            else:
+                d = defer.maybeDeferred(meth, channel, *params)
             @d.addErrback
             def _eb(f):
                 self.msg(channel, '%s in %s: %s' % (c(' Error ', YELLOW, RED), command, f.getErrorMessage()))
@@ -298,6 +307,44 @@ class TheresaProtocol(_IRCBase):
                 .addCallback(self.messageChannels, [channel]))
 
     command_twit = command_twat
+
+    def dccSend(self, resp, user):
+        name = binascii.b2a_hex(os.urandom(4)) + '.' + magic.from_buffer(resp, mime=True).split('/')[1]
+        with open(name, 'wb+') as f:
+            f.write(resp)
+        size = os.stat(name).st_size
+
+        def _dataReceived(self, data):
+            self.sendBlock()
+
+        def _connectionLost(self, reason):
+            self.connected = 0
+            if hasattr(self.file, "close"):
+                os.remove(self.file.name)
+                self.file.close()
+
+        factory = irc.DccSendFactory(name)
+        factory.protocol.dataReceived = _dataReceived
+        factory.protocol.connectionLost = _connectionLost
+        tcpserv = reactor.listenTCP(0, factory, 1)
+        port = tcpserv._realPortNumber
+        my_address = str(struct.unpack('!L', socket.inet_aton(urllib.urlopen('http://bot.whatismyipaddress.com/').read()))[0])
+
+        args = ' '.join(['SEND', name, my_address, str(port), str(size)])
+        self.ctcpMakeQuery(user.split('!~')[0], [('DCC', args)])
+
+    def command_dongcc(self, channel, user, cap):
+        if not self.factory.tahoe:
+            return
+        capurl = self.factory.tahoe + urllib.quote(cap)
+        capfile = urllib.urlopen(capurl + '?t=json')
+        if json.loads(capfile.read())[0] == 'dirnode':
+            self.msg(channel, "%s in command_dongcc: You can't request a directory (yet)." % c(' Error ', YELLOW, RED))
+        self.msg(channel, '%s Satisfying DCC request for %s.' % (c(' Tahoe-LAFS ', WHITE, CYAN), user.split('!~')[0]))
+
+        d = self.factory.agent.request('GET', capurl)
+        d.addCallback(receive, StringReceiver())
+        d.addCallback(self.dccSend, user)
 
     def _extractFollowing(self, data):
         return ('following @%(screen_name)s: %(following)s' % data).encode('utf-8')
