@@ -182,12 +182,12 @@ class TahoeReceiver(protocol.Protocol):
         if self.received > 16384:
             self.transport.pauseProducing()
             self.initialDeferred.callback(''.join(self.buffer))
-            del self.buffer
+            self.buffer = None
 
     def connectionLost(self, reason):
         if self.proto:
             self.proto.transport.loseConnection()
-        else:
+        elif self.buffer is not None:
             self.initialDeferred.callback(''.join(self.buffer))
         self.done = True
 
