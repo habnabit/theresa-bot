@@ -5,13 +5,17 @@ from twisted.internet.error import AlreadyCalled
 from twisted.python import log
 from twisted.web import client, server
 from twisted.web.resource import Resource
+from twisted.web.server import NOT_DONE_YET
 from twisted.web.template import tags, renderElement
 
 from functools import partial
 import omoogle
 import random
+import json
 import time
 import sys
+import os
+
 
 def timeoutFunc(nCharacters):
     return 21 * nCharacters ** 0.4 + 10
@@ -22,6 +26,39 @@ def disconnectQuietly(stranger):
     except omoogle.InvalidState:
         pass
 
+
+class FileLikeResource(Resource):
+    def __init__(self, fobj):
+        Resource.__init__(self)
+        self.fobj = fobj
+        self._listeners = set()
+
+    def render_GET(self, request):
+        self._listeners.add(request)
+        request.notifyFinish().addBoth(self._doneWith, request)
+        request.setHeader('content-type', 'text/event-stream')
+        self.write('--- log opened ---\n', [request])
+        return NOT_DONE_YET
+
+    def _doneWith(self, result, request):
+        self._listeners.discard(request)
+
+    def write(self, data, listeners=None):
+        if listeners is None:
+            self.fobj.write(data)
+            listeners = self._listeners
+        if not listeners:
+            return
+
+        data = '\n'.join('data: ' + line for line in data.splitlines())
+        for listener in listeners:
+            listener.write(data)
+            listener.write('\n\n')
+
+    def flush(self):
+        self.fobj.flush()
+
+
 class MiddleManager(object):
     def __init__(self, clock, pool, conversationCount):
         self.clock = clock
@@ -31,7 +68,9 @@ class MiddleManager(object):
         self.wiring = {}
         self._logs = {}
         self._timeouts = {}
-        self._logPool = [open('logs/%s.txt' % (i,), 'a') for i in xrange(conversationCount)]
+        self._logPool = [FileLikeResource(open('logs/%s.txt' % (i,), 'a'))
+                         for i in xrange(conversationCount)]
+        self.logResources = list(self._logPool)
         self._looper = task.LoopingCall(self._run)
         self._lastSent = {}
 
@@ -170,6 +209,21 @@ class MiddleManagerResource(Resource):
         body = tags.ul(*[self.strangerElement(s) for s in self.manager.wiring])
         return renderElement(request, body)
 
+class LogViewerResource(Resource):
+    def __init__(self, stream):
+        Resource.__init__(self)
+        self.stream = stream
+        with open(os.path.join(os.path.dirname(__file__), 'logs.js')) as infile:
+            self.logJavascript = infile.read()
+
+    def render_GET(self, request):
+        body = [
+            tags.p(id='content', style='white-space: pre-wrap; font-family: monospace'),
+            tags.script('var stream = %s;' % (json.dumps(self.stream),), type='text/javascript'),
+            tags.script(self.logJavascript, type='text/javascript'),
+        ]
+        return renderElement(request, body)
+
 possibleLikes = [
     ['furry', 'yiff'],
     ['homestuck', 'mspa'],
@@ -196,6 +250,12 @@ def main(reactor, conversations, proxy=None):
     root.putChild('strangers', omoogle.StrangerPoolResource(strangerPool))
     root.putChild('recaptcha', omoogle.RecaptchaSolverResource(strangerPool))
     root.putChild('manager', MiddleManagerResource(manager))
+    logs = Resource()
+    root.putChild('logs', logs)
+    for e, logResource in enumerate(manager.logResources):
+        stream = '%d.stream' % e
+        logs.putChild(str(e), LogViewerResource(stream))
+        logs.putChild(stream, logResource)
     site = server.Site(root)
     serverEndpoint = endpoints.TCP4ServerEndpoint(reactor, 8808)
     deferreds = [
