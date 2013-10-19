@@ -6,6 +6,7 @@ from twisted.python import log
 from twisted.web import client, server
 from twisted.web.resource import Resource
 from twisted.web.server import NOT_DONE_YET
+from twisted.web.static import File
 from twisted.web.template import tags, renderElement
 
 from functools import partial
@@ -273,6 +274,7 @@ def main(reactor, conversations, proxy=None):
         stream = '%d.stream' % e
         logs.putChild(str(e), LogViewerResource(stream))
         logs.putChild(stream, logResource)
+    logs.putChild('sessions', File('sessions'))
     site = server.Site(root)
     serverEndpoint = endpoints.TCP4ServerEndpoint(reactor, 8808)
     deferreds = [
