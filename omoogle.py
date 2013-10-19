@@ -144,9 +144,14 @@ class Stranger(object):
 
     def _chooseNextServer(self):
         if not self.servers:
+            log.msg('%s: ran out of servers' % (self,))
             self._disconnect()
             return
         self.server = self.servers.pop(0)
+        if len(self.servers) <= 2:
+            log.msg('%s: refreshing server list' % (self,))
+            d = self._fetchStatus()
+            d.addErrback(log.err, 'error refreshing servers')
 
     def _requestDone(self, result, requestDeferred):
         if self._requestDeferreds is not None:
@@ -238,6 +243,11 @@ class Stranger(object):
         if self.autoPump:
             self.pumpEvents()
 
+    def _fetchStatus(self):
+        d = fetchOmegleStatus(self.clock, self.agent)
+        d.addCallback(self._parseStatus)
+        return d
+
     def _parseStatus(self, status):
         self.servers = [server.encode() for server in status['servers']]
         self.status = status
@@ -261,8 +271,7 @@ class Stranger(object):
     def connect(self, topics=None, randid=None):
         self.startedAt = datetime.datetime.now()
         self._setState('fetching-status')
-        d = fetchOmegleStatus(self.clock, self.agent)
-        d.addCallback(self._parseStatus)
+        d = self._fetchStatus()
         d.addCallbacks(self._requestID, self._disconnect, callbackArgs=(topics, randid))
         return d
 
