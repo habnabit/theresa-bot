@@ -9,6 +9,7 @@ from twisted.web.server import NOT_DONE_YET
 from twisted.web.template import tags, renderElement
 
 from functools import partial
+import collections
 import datetime
 import omoogle
 import random
@@ -34,12 +35,15 @@ class FileLikeResource(Resource):
         self.fobj = fobj
         self._listeners = set()
         self._sessionfile = None
+        self._context = collections.deque(maxlen=50)
 
     def render_GET(self, request):
         self._listeners.add(request)
         request.notifyFinish().addBoth(self._doneWith, request)
         request.setHeader('content-type', 'text/event-stream')
-        self.write('--- log opened ---\n', [request])
+        request.write('data: --- log opened ---\n\n')
+        for chunk in list(self._context):
+            self.write(chunk, [request])
         return NOT_DONE_YET
 
     def _doneWith(self, result, request):
@@ -51,14 +55,15 @@ class FileLikeResource(Resource):
             if not self._sessionfile:
                 self.newSession()
             self._sessionfile.write(data)
+            self._context.append(data)
             listeners = self._listeners
+
         if not listeners:
             return
 
-        data = '\n'.join('data: ' + line for line in data.splitlines())
+        data = '\n'.join('data: ' + line for line in data.splitlines()) + '\n\n'
         for listener in listeners:
             listener.write(data)
-            listener.write('\n\n')
 
     def flush(self):
         self.fobj.flush()
