@@ -42,7 +42,6 @@ class FileLikeResource(Resource):
         self._listeners.add(request)
         request.notifyFinish().addBoth(self._doneWith, request)
         request.setHeader('content-type', 'text/event-stream')
-        request.write('data: --- log opened ---\n\n')
         for chunk in list(self._context):
             self.write(chunk, [request])
         return NOT_DONE_YET
@@ -227,6 +226,18 @@ class MiddleManagerResource(Resource):
         body = tags.ul(*[self.strangerElement(s) for s in self.manager.wiring])
         return renderElement(request, body)
 
+class AllLogViewerResource(Resource):
+    def __init__(self, nStreams):
+        Resource.__init__(self)
+        self.nStreams = nStreams
+
+    def render_GET(self, request):
+        body = [
+            tags.iframe(src='/logs/%d' % (e,), seamless='', style='width: 95%; height: 30em; margin: 0.5em;')
+            for e in xrange(self.nStreams)
+        ]
+        return renderElement(request, body)
+
 class LogViewerResource(Resource):
     def __init__(self, stream):
         Resource.__init__(self)
@@ -248,7 +259,7 @@ possibleLikes = [
     ['tumblr'],
 ]
 
-def main(reactor, conversations, proxy=None):
+def main(reactor, conversations, description='tcp:8808', proxy=None):
     conversations = int(conversations)
     log.startLogging(sys.stderr)
     if proxy is not None:
@@ -267,7 +278,7 @@ def main(reactor, conversations, proxy=None):
     root.putChild('strangers', omoogle.StrangerPoolResource(strangerPool))
     root.putChild('recaptcha', omoogle.RecaptchaSolverResource(strangerPool))
     root.putChild('manager', MiddleManagerResource(manager))
-    logs = Resource()
+    logs = AllLogViewerResource(conversations)
     root.putChild('logs', logs)
     for e, logResource in enumerate(manager.logResources):
         stream = '%d.stream' % e
@@ -276,7 +287,7 @@ def main(reactor, conversations, proxy=None):
     logs.putChild('sessions', File('sessions'))
     root.putChild('static', File(os.path.join(os.path.dirname(__file__), 'static')))
     site = server.Site(root)
-    serverEndpoint = endpoints.TCP4ServerEndpoint(reactor, 8808)
+    serverEndpoint = endpoints.serverFromString(reactor, description)
     deferreds = [
         serverEndpoint.listen(site),
         manager.start(),

@@ -1,3 +1,7 @@
+body {
+  background: #eee;
+}
+
 #content {
   white-space: pre-wrap;
   font-family: sans-serif;
@@ -5,10 +9,11 @@
 }
 
 #content div {
-  margin: 0.25em 10%;
-  width: 60%;
+  background: #fff;
+  margin: 0.25em 2%;
+  width: 45%;
   clear: both;
-  border: 1px #cccccc solid;
+  border: 1px #ccc solid;
   padding: 0.25em 0.5em;
   border-radius: 5px;
 }
