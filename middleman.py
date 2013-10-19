@@ -9,6 +9,7 @@ from twisted.web.server import NOT_DONE_YET
 from twisted.web.template import tags, renderElement
 
 from functools import partial
+import datetime
 import omoogle
 import random
 import json
@@ -32,6 +33,7 @@ class FileLikeResource(Resource):
         Resource.__init__(self)
         self.fobj = fobj
         self._listeners = set()
+        self._sessionfile = None
 
     def render_GET(self, request):
         self._listeners.add(request)
@@ -46,6 +48,9 @@ class FileLikeResource(Resource):
     def write(self, data, listeners=None):
         if listeners is None:
             self.fobj.write(data)
+            if not self._sessionfile:
+                self.newSession()
+            self._sessionfile.write(data)
             listeners = self._listeners
         if not listeners:
             return
@@ -57,6 +62,12 @@ class FileLikeResource(Resource):
 
     def flush(self):
         self.fobj.flush()
+
+    def newSession(self):
+        if self._sessionfile is not None:
+            self._sessionfile.close()
+        sessionPath = 'sessions/%s.txt' % (datetime.datetime.now().isoformat(),)
+        self._sessionfile = open(sessionPath, 'w')
 
 
 class MiddleManager(object):
@@ -157,6 +168,7 @@ class MiddleManager(object):
 
     def _openLog(self, s1, s2):
         logfile = self._logPool.pop(0)
+        logfile.newSession()
         def logMessage(glyph, message, depth=1):
             logfile.write((u'[%s] %s %s\n' % (time.strftime('%T'), glyph * depth, message)).encode('utf-8'))
             logfile.flush()
