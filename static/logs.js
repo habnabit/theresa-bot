@@ -15,6 +15,7 @@ var lastDirection = undefined;
 var lastBox = undefined;
 
 source.onmessage = function (event) {
+    var doScroll = document.body.scrollHeight - innerHeight - pageYOffset <= 64;
     data = parseMessage(event.data);
     if (data.direction !== lastDirection) {
         lastBox = document.createElement('div');
@@ -26,5 +27,6 @@ source.onmessage = function (event) {
     newNode.textContent = data.message;
     newNode.className = data.isText? 'message' : 'system';
     lastBox.appendChild(newNode);
-    window.scrollTo(0, document.body.scrollHeight);
+    if (doScroll)
+        window.scrollTo(0, document.body.scrollHeight);
 }

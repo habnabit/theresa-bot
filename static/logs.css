@@ -2,6 +2,11 @@ body {
   background: #eee;
 }
 
+#spacer {
+  clear: both;
+  height: 2em;
+}
+
 #content {
   white-space: pre-wrap;
   font-family: sans-serif;

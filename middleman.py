@@ -246,10 +246,14 @@ class LogViewerResource(Resource):
     def render_GET(self, request):
         body = [
             tags.link(rel='stylesheet', type='text/css', href='/static/logs.css'),
-            tags.div(id='content'),
+            tags.div(
+                tags.div(id='content'),
+                tags.div(id='spacer'),
+            ),
             tags.script('var stream = %s;' % (json.dumps(self.stream),), type='text/javascript'),
             tags.script(type='text/javascript', src='/static/logs.js'),
         ]
+        request.setHeader('content-type', 'text/html; charset: utf-8')
         return renderElement(request, body)
 
 possibleLikes = [
