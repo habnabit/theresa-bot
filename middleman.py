@@ -16,7 +16,9 @@ import omoogle
 import random
 import json
 import time
+import yaml
 import sys
+import re
 import os
 
 
@@ -255,24 +257,29 @@ class LogViewerResource(Resource):
         request.setHeader('content-type', 'text/html; charset: utf-8')
         return renderElement(request, body)
 
-possibleLikes = [
-    ['furry', 'yiff'],
-    ['homestuck', 'mspa'],
-    ['mlp', 'clop'],
-    ['tumblr'],
-]
-
-def main(reactor, conversations, description='tcp:8808', proxy=None):
-    conversations = int(conversations)
-    log.startLogging(sys.stderr)
-    if proxy is not None:
-        proxyEndpoint = endpoints.clientFromString(reactor, proxy)
+def main(reactor, configfile):
+    with open(configfile) as fobj:
+        config = yaml.safe_load(fobj)
+    conversations = config['conversations']
+    fileLogger = log.FileLogObserver(sys.stderr)
+    toDiscard = [
+        '^(Starting|Stopping) factory <twisted.web.client._HTTP11ClientFactory instance at [0-9a-fA-FxX]+>$',
+    ]
+    discardRegexp = re.compile('(?:%s)' % ('|'.join(toDiscard),))
+    def observer(ev):
+        if ev.get('message') and discardRegexp.match(ev['message'][0]):
+            return
+        fileLogger.emit(ev)
+    log.defaultObserver.stop()
+    log.addObserver(observer)
+    if 'http-proxy' in config:
+        proxyEndpoint = endpoints.clientFromString(reactor, config['http-proxy'])
         agent = client.ProxyAgent(proxyEndpoint, reactor)
     else:
         agent = client.Agent(reactor)
     strangerPool = omoogle.StrangerPool(reactor, agent, conversations * 2, 6)
     def connectStranger(s, randid):
-        likes = random.choice(possibleLikes)
+        likes = random.choice(config['likes'])
         return s.connect(likes, randid)
     strangerPool.connectStranger = connectStranger
     strangerPool.start()
@@ -290,7 +297,7 @@ def main(reactor, conversations, description='tcp:8808', proxy=None):
     logs.putChild('sessions', File('sessions'))
     root.putChild('static', File(os.path.join(os.path.dirname(__file__), 'static')))
     site = server.Site(root)
-    serverEndpoint = endpoints.serverFromString(reactor, description)
+    serverEndpoint = endpoints.serverFromString(reactor, config.get('http-endpoint', 'tcp:8808'))
     deferreds = [
         serverEndpoint.listen(site),
         manager.start(),

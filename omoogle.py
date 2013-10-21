@@ -109,6 +109,8 @@ class Stranger(object):
     clientID = commonLikes = servers = status = startedAt = None
     recaptchaPublicKey = None
 
+    _counter = itertools.count()
+
     def __init__(self, clock, agent, eventCallback=None, autoPump=True):
         self.clock = clock
         self.agent = agent
@@ -119,6 +121,10 @@ class Stranger(object):
         self._requestDeferreds = {}
         self._stateChangeDeferreds = collections.defaultdict(list)
         self._stateResolutions = {}
+        self._id = next(self._counter)
+
+    def __repr__(self):
+        return '<Stranger %d>' % (self._id,)
 
     def _setState(self, state, resolution=None):
         self.state = state
@@ -175,9 +181,9 @@ class Stranger(object):
             self._chooseNextServer()
             url = 'http://%s/%s' % (server, whichAPI)
             if self.state == 'done':
-                log.err(failure, 'stranger done; propagating failure from %s' % (url,))
+                log.err(failure, '%s: stranger done; propagating failure from %s' % (self, url))
                 return failure
-            log.err(failure, 'failed request on %s; retrying on a different server' % (url,))
+            log.err(failure, '%s: failed request on %s; retrying on a different server' % (self, url))
             return _makeRequest()
 
         def _makeRequest():
@@ -213,6 +219,7 @@ class Stranger(object):
     def _parseEvents(self, events):
         if events is None:
             events = [['strangerReallyDisconnected']]
+            log.msg('%s: no events' % (self,))
         for event in events:
             handler = getattr(self, '_strangerEvent_%s' % (event[0],), None)
             if handler is not None:
@@ -284,7 +291,7 @@ class Stranger(object):
     def pumpEvents(self, ign=None):
         if self.state == 'done':
             return
-        self.fetchEvents().addErrback(log.err, 'error pumping events').addCallback(self.pumpEvents)
+        self.fetchEvents().addErrback(log.err, '%s: error pumping events' % (self,)).addCallback(self.pumpEvents)
 
     def _checkActionResponse(self, response):
         def checkWin(s):
@@ -312,7 +319,7 @@ class Stranger(object):
     def disconnect(self):
         def _disconnectionCallback(result):
             if isinstance(result, Failure):
-                log.err(result, "error during disconnection notification; disconnecting anyway")
+                log.err(result, '%s: error during disconnection notification; disconnecting anyway' % (self,))
             self._disconnect()
 
         if self.state in ('waiting-for-peer', 'got-peer'):
@@ -503,6 +510,6 @@ class RecaptchaSolverResource(Resource):
             d = stranger.solveRecaptcha(
                 request.args['recaptcha_challenge_field'][0],
                 request.args['recaptcha_response_field'][0])
-            d.addErrback(log.err, 'error submitting captcha')
+            d.addErrback(log.err, '%s: error submitting captcha' % (stranger,))
             excluding = stranger,
         return self.render_GET(request, excluding)
