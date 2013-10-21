@@ -108,9 +108,8 @@ class MiddleManager(object):
         self._logs[s2], self._logs[s3] = self._logs[s3], self._logs[s2]
 
     def _checkLastSent(self, message, receivingStranger):
-        return False
         for sendingStranger, lastSent in self._lastSent.iteritems():
-            if message == lastSent:
+            if message == lastSent and self._wiring[sendingStranger] != receivingStranger:
                 break
         else:
             return False
