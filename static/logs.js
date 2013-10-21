@@ -43,9 +43,22 @@ function scrollToPosition(pos) {
     scrollData.interval = setInterval(scrollALittle, 10);
 }
 
+var urlRegex = /\b(?:https?:\/\/|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)[^\s()<>\[\]]+[^\s`!()\[\]{};:\'".,<>?\xab\xbb\u201c\u201d\u2018\u2019]/gi;
+
+var parseQueue = [];
+
 source.onmessage = function (event) {
-    var doScroll = document.body.scrollHeight - innerHeight - pageYOffset <= 64;
-    data = parseMessage(event.data);
+    parseQueue.push(parseMessage(event.data));
+    setTimeout(parseAMessage, 0);
+}
+
+function parseAMessage() {
+    if (!parseQueue.length)
+        return;
+    var doScroll = (
+        document.body.scrollHeight - innerHeight - pageYOffset <= 64
+            || scrollData.interval);
+    data = parseQueue.shift();
     if (data.direction !== lastDirection) {
         lastBox = document.createElement('div');
         lastBox.className = data.direction;
@@ -54,6 +67,7 @@ source.onmessage = function (event) {
     }
     var newNode = document.createElement('p');
     newNode.textContent = data.message;
+    newNode.innerHTML = newNode.innerHTML.replace(urlRegex, '<a href="$&">$&</a>');
     newNode.className = data.isText? 'message' : 'system';
     lastBox.appendChild(newNode);
     if (doScroll)
