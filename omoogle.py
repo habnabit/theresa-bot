@@ -121,10 +121,10 @@ class Stranger(object):
         self._requestDeferreds = {}
         self._stateChangeDeferreds = collections.defaultdict(list)
         self._stateResolutions = {}
-        self._id = next(self._counter)
+        self.strangerID = str(next(self._counter))
 
     def __repr__(self):
-        return '<Stranger %d>' % (self._id,)
+        return '<Stranger %s>' % (self.strangerID,)
 
     def _setState(self, state, resolution=None):
         self.state = state
@@ -346,7 +346,6 @@ class StrangerPool(object):
         self._waiting = []
         self._randids = set()
         self.strangers = {}
-        self._strangerCounter = itertools.count()
         self.started = False
         for x in xrange(self.preferredPoolSize):
             self._randids.add(generateRandID())
@@ -365,8 +364,7 @@ class StrangerPool(object):
         randid = self._randids.pop()
         self.connectStranger(s, randid)
         self._connecting.add(s)
-        strangerID = s.strangerID = str(self._strangerCounter.next())
-        self.strangers[strangerID] = s
+        self.strangers[s.strangerID] = s
         s.waitForState('got-peer').addCallback(self._strangerConnected, s)
         s.waitForState('done').addCallback(self._pruneStranger, s, randid)
 

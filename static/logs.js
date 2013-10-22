@@ -28,6 +28,7 @@ function scrollALittle() {
     var delta = (now() - scrollData.startedAt) / 200;
     if (delta > 1) {
         clearInterval(scrollData.interval);
+        scrollData.interval = undefined;
         var coeff = 1;
     } else {
         var coeff = (-Math.cos(Math.PI * delta) + 1) / 2;

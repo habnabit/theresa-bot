@@ -1,3 +1,5 @@
+# coding: utf-8
+
 from __future__ import print_function
 
 from twisted.internet import defer, task, endpoints
@@ -111,7 +113,7 @@ class MiddleManager(object):
 
     def _checkLastSent(self, message, receivingStranger):
         for sendingStranger, lastSent in self._lastSent.iteritems():
-            if message == lastSent and self._wiring[sendingStranger] != receivingStranger:
+            if message == lastSent and self.wiring[sendingStranger] != receivingStranger:
                 break
         else:
             return False
@@ -152,6 +154,8 @@ class MiddleManager(object):
             otherStranger.disconnect()
         elif event[0] == 'swap':
             l('swapping with a stranger with interests: %r' % (event[1].commonLikes,))
+        elif event[0] == 'identDigests':
+            l(event[1].replace(',', ' '))
 
     def _timeoutStranger(self, stranger):
         _, l = self._logs[stranger]
@@ -206,6 +210,19 @@ class MiddleManager(object):
         self._looper.stop()
         return defer.DeferredList([s.waitForState('done') for s in self.wiring])
 
+    def voiceOfGod(self, stranger, message):
+        _, logf = self._logs[stranger]
+        other = self.wiring[stranger]
+        _, otherLogf = self._logs[other]
+        message = u'»ᴛʜᴇ ᴠᴏɪᴄᴇ ᴏғ ɢᴏᴅ ʙᴏᴏᴍs: ' + message
+        logf(message, depth=2)
+        otherLogf(message, depth=2)
+        d = defer.gatherResults([
+            stranger.sendMessage(message),
+            other.sendMessage(message),
+        ])
+        return d
+
 class MiddleManagerResource(Resource):
     def __init__(self, manager):
         Resource.__init__(self)
@@ -221,11 +238,29 @@ class MiddleManagerResource(Resource):
                 tags.dt('Timeout'),
                 tags.dd('%(timeout)0.4gs' % timeoutData),
                 tags.dt('Throughput'),
-                tags.dd('%(count)dB' % timeoutData)))
+                tags.dd('%(count)dB' % timeoutData),
+                tags.dt('Context'),
+                tags.dd(tags.pre(''.join(self.manager._logs[stranger][0]._context)))),
+            tags.form(
+                tags.input(type='hidden', name='id', value=str(stranger.strangerID)),
+                tags.textarea(name='message'),
+                tags.button('Voice of God', name='action', value='god'),
+                action='', method='post'))
 
     def render_GET(self, request):
         body = tags.ul(*[self.strangerElement(s) for s in self.manager.wiring])
         return renderElement(request, body)
+
+    def render_POST(self, request):
+        action = request.args.get('action', [None])[0]
+        strangerID = request.args.get('id', [None])[0]
+        stranger = self.manager.pool.strangers.get(strangerID)
+        if stranger is None:
+            return self.render_GET(request)
+        if action == 'god':
+            d = self.manager.voiceOfGod(stranger, request.args.get('message', ['hello'])[0])
+            return renderElement(request, d.addCallback(str))
+        return self.render_GET(request)
 
 class AllLogViewerResource(Resource):
     def __init__(self, nStreams):
