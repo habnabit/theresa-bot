@@ -52,9 +52,15 @@ class StringProducer(object):
         pass
 
 
+def tryParsingJSON(s):
+    try:
+        return json.loads(s)
+    except ValueError as e:
+        raise ValueError('error decoding', s, e)
+
 def receiveJSON(response):
     d = receive(response, StringReceiver())
-    d.addCallback(json.loads)
+    d.addCallback(tryParsingJSON)
     return d
 
 def setTimeout(d, clock, timeout):
@@ -127,6 +133,7 @@ class Stranger(object):
         return '<Stranger %s>' % (self.strangerID,)
 
     def _setState(self, state, resolution=None):
+        log.msg('%s: %s -> %s' % (self, self.state, state))
         self.state = state
         self._stateResolutions[state] = resolution
         for deferred in self._stateChangeDeferreds.pop(state, []):
@@ -154,10 +161,6 @@ class Stranger(object):
             self._disconnect()
             return
         self.server = self.servers.pop(0)
-        if len(self.servers) <= 2:
-            log.msg('%s: refreshing server list' % (self,))
-            d = self._fetchStatus()
-            d.addErrback(log.err, 'error refreshing servers')
 
     def _requestDone(self, result, requestDeferred):
         if self._requestDeferreds is not None:
@@ -233,7 +236,7 @@ class Stranger(object):
         self._disconnect()
 
     def _strangerEvent_connected(self):
-        self._setState('got-peer')
+        log.msg('%s: connected to peer; waiting for ident' % (self,))
 
     def _strangerEvent_commonLikes(self, likes):
         self.commonLikes = likes
@@ -242,6 +245,19 @@ class Stranger(object):
     def _strangerEvent_recaptchaRequired(self, publicKey):
         self.recaptchaPublicKey = publicKey
         self._setState('needs-recaptcha')
+
+    def _strangerEvent_identDigests(self, digests):
+        self.identDigests = digests.split(',')
+        if self.identDigests[0] == self.identDigests[2]:
+            log.msg('%s: connected to self; aborting (%r)' % (self, self.identDigests))
+            self._disconnect()
+        else:
+            self._setState('got-peer')
+
+    def _strangerEvent_statusInfo(self, status):
+        self.servers = [server.encode() for server in status['servers']]
+        self.status = status
+        self._chooseNextServer()
 
     def _gotID(self, response):
         self.clientID = response['clientID']
@@ -252,13 +268,8 @@ class Stranger(object):
 
     def _fetchStatus(self):
         d = fetchOmegleStatus(self.clock, self.agent)
-        d.addCallback(self._parseStatus)
+        d.addCallback(self._strangerEvent_statusInfo)
         return d
-
-    def _parseStatus(self, status):
-        self.servers = [server.encode() for server in status['servers']]
-        self.status = status
-        self._chooseNextServer()
 
     def _requestID(self, ign, topics, randid):
         args = dict(rcs='1', spid='', firstevents='1')
@@ -284,6 +295,7 @@ class Stranger(object):
 
     def fetchEvents(self, timeout=0):
         d = self.requestWithID('events', timeout=timeout)
+        d.addCallback(trapBadStatuses)
         d.addCallback(receiveJSON)
         d.addCallback(self._parseEvents)
         return d
@@ -346,7 +358,6 @@ class StrangerPool(object):
         self._waiting = []
         self._randids = set()
         self.strangers = {}
-        self.started = False
         for x in xrange(self.preferredPoolSize):
             self._randids.add(generateRandID())
 
@@ -362,14 +373,13 @@ class StrangerPool(object):
         s = self.strangerFactory(self.clock, self.agent, None)
         log.msg('%s: starting' % (s,))
         randid = self._randids.pop()
-        self.connectStranger(s, randid)
+        self.connectStranger(s, randid).addErrback(log.err, '%s: error connecting' % (s,))
         self._connecting.add(s)
         self.strangers[s.strangerID] = s
         s.waitForState('got-peer').addCallback(self._strangerConnected, s)
         s.waitForState('done').addCallback(self._pruneStranger, s, randid)
 
     def _strangerConnected(self, ign, stranger):
-        log.msg('%s: got peer' % (stranger,))
         self._connecting.discard(stranger)
         self._connected.add(stranger)
         if self._waiting:
@@ -379,7 +389,6 @@ class StrangerPool(object):
             self._ready.add(stranger)
 
     def _pruneStranger(self, ign, stranger, randid):
-        log.msg('%s: done' % (stranger,))
         self._connecting.discard(stranger)
         self._ready.discard(stranger)
         self._connected.discard(stranger)
@@ -393,8 +402,6 @@ class StrangerPool(object):
         self._looper.stop()
 
     def waitForStranger(self):
-        if self.started:
-            self._startSomeStrangers()
         d = defer.Deferred()
         if self._ready:
             stranger = self._ready.pop()

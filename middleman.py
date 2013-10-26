@@ -25,7 +25,7 @@ import os
 
 
 def timeoutFunc(nCharacters):
-    return 21 * nCharacters ** 0.4 + 10
+    return 300 * nCharacters ** 0.2 + 10
 
 def disconnectQuietly(stranger):
     try:
@@ -71,6 +71,8 @@ class FileLikeResource(Resource):
 
     def flush(self):
         self.fobj.flush()
+        if self._sessionfile is not None:
+            self._sessionfile.flush()
 
     def newSession(self):
         if self._sessionfile is not None:
@@ -92,7 +94,6 @@ class MiddleManager(object):
                          for i in xrange(conversationCount)]
         self.logResources = list(self._logPool)
         self._looper = task.LoopingCall(self._run)
-        self._lastSent = {}
 
     def _bumpTimeoutCounter(self, stranger, increment):
         d = self._timeouts[stranger]
@@ -111,15 +112,6 @@ class MiddleManager(object):
             self.wiring[o] = s
         self._logs[s2], self._logs[s3] = self._logs[s3], self._logs[s2]
 
-    def _checkLastSent(self, message, receivingStranger):
-        for sendingStranger, lastSent in self._lastSent.iteritems():
-            if message == lastSent and self.wiring[sendingStranger] != receivingStranger:
-                break
-        else:
-            return False
-        self._swapStrangers(sendingStranger, receivingStranger)
-        return True
-
     def _reflectEvent(self, stranger, event):
         if stranger not in self.wiring:
             return
@@ -136,10 +128,6 @@ class MiddleManager(object):
             self._bumpTimeoutCounter(otherStranger, len(message))
             l(message, depth=2)
             otherStranger.sendMessage(message)
-            if len(message) > 10 and self._checkLastSent(message, otherStranger):
-                stranger.disconnect()
-            else:
-                self._lastSent[stranger] = message
         elif event[0] == 'typing':
             self._bumpTimeoutCounter(stranger, 0)
             l('started typing')
@@ -174,7 +162,6 @@ class MiddleManager(object):
         l('disconnected')
         if logfile not in self._logPool:
             self._logPool.append(logfile)
-        self._lastSent.pop(s, None)
 
     def _openLog(self, s1, s2):
         logfile = self._logPool.pop(0)
@@ -191,6 +178,7 @@ class MiddleManager(object):
             return
 
         s1, s2 = yield self.pool.waitForNStrangers(2)
+        log.msg('opening %s x %s' % (s1, s2))
         self._openLog(s1, s2)
         for s, o in [[s1, s2], [s2, s1]]:
             self.wiring[s] = o
