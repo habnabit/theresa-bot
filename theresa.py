@@ -319,7 +319,7 @@ class TheresaProtocol(_IRCBase):
         pass
 
     def privmsg(self, user, channel, message):
-        if not channel.startswith('#'):
+        if channel not in self.channels:
             return
 
         addressedMatch = re.match(r'(?i)^s*%s\s*[,:> ]+(\S?.*?)[.!?]?\s*$' % (re.escape(self.nickname),), message)
@@ -464,10 +464,11 @@ class TheresaProtocol(_IRCBase):
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self, agent, twatter, tahoe=None, reactor=None):
+    def __init__(self, agent, twatter, tahoe=None, reactor=None, endpoint=None):
         self.agent = agent
         self.twatter = twatter
         self.tahoe = tahoe
         if reactor is None:
             from twisted.internet import reactor
         self.reactor = reactor
+        self.endpoint = endpoint
