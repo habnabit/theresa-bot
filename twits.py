@@ -116,7 +116,7 @@ class TwitterStream(LineOnlyReceiver, TimeoutMixin):
         else:
             self.deferred.errback(reason)
 
-class Twatter(object):
+class Twitter(object):
     "Close to the most minimal twitter interface ever."
     def __init__(self, agent, twitterAPI=defaultTwitterAPI, streamingAPI=defaultStreamingAPI):
         self.agent = agent
@@ -156,8 +156,8 @@ class Twatter(object):
 
 class StreamPreserver(Service):
     "Keep a stream connected as a service."
-    def __init__(self, twatter, resource, **parameters):
-        self.twatter = twatter
+    def __init__(self, twitter, resource, **parameters):
+        self.twitter = twitter
         self.resource = resource
         self.parameters = parameters
         self._streamDone = None
@@ -171,7 +171,7 @@ class StreamPreserver(Service):
             log.msg('not reconnecting twitter stream %r' % self)
             return
         log.msg('reconnecting twitter stream %r' % self)
-        d = self._streamDone = self.twatter.stream(self.resource, self._streamDelegate, **self.parameters)
+        d = self._streamDone = self.twitter.stream(self.resource, self._streamDelegate, **self.parameters)
         d.addBoth(self._connectStream)
         d.addErrback(log.err, 'error reading from twitter stream %r' % self)
         return r
@@ -220,17 +220,17 @@ dumbCrapReplacements = {
 }
 dumbCrapRegexp = re.compile('|'.join(re.escape(s) for s in dumbCrapReplacements))
 
-def extractRealTwatText(twat):
+def extractRealTwitText(twit):
     "Oh my god why is this necessary."
-    if 'retweeted_status' in twat:
-        rt = twat['retweeted_status']
-        return u'RT @%s: %s' % (rt['user']['screen_name'], extractRealTwatText(rt))
+    if 'retweeted_status' in twit:
+        rt = twit['retweeted_status']
+        return u'RT @%s: %s' % (rt['user']['screen_name'], extractRealTwitText(rt))
     replacements = sorted(
         (entity['indices'], entity[replacement])
         for entityType, replacement in entityReplacements
-        if entityType in twat['entities']
-        for entity in twat['entities'][entityType])
-    mutableText = list(twat['text'])
+        if entityType in twit['entities']
+        for entity in twit['entities'][entityType])
+    mutableText = list(twit['text'])
     for (l, r), replacement in reversed(replacements):
         mutableText[l:r] = replacement
     text = u''.join(mutableText)

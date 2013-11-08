@@ -3,7 +3,7 @@
 # See COPYING for details.
 
 import theresa
-import twatter
+import twitter
 
 from twisted.application import internet, service
 from twisted.web.client import Agent, HTTPConnectionPool
@@ -20,7 +20,7 @@ class Theresa(theresa.TheresaProtocol):
     def streamDelegate(self, data):
         if 'text' not in data:
             return
-        self.twatDelegate(self.channels)(data)
+        self.twitDelegate(self.channels)(data)
 
     def signedOn(self):
         theresa.TheresaProtocol.signedOn(self)
@@ -35,8 +35,8 @@ class TheresaFactory(theresa.TheresaFactory):
 application = service.Application("theresa")
 pool = HTTPConnectionPool(reactor)
 agent = Agent(reactor, pool=pool)
-twatterInstance = twatter.Twatter(twatter.OAuthAgent(agent, consumer, token))
-streamer = twatter.StreamPreserver(twatterInstance, 'user.json')
+twitterInstance = twitter.Twitter(twitter.OAuthAgent(agent, consumer, token))
+streamer = twitter.StreamPreserver(twitterInstance, 'user.json')
 streamer.setServiceParent(application)
-theresaFac = TheresaFactory(agent, twatterInstance)
+theresaFac = TheresaFactory(agent, twitterInstance)
 internet.TCPClient('irc.esper.net', 5555, theresaFac).setServiceParent(application)

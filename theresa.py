@@ -16,7 +16,6 @@ import mimetypes
 import traceback
 import operator
 import urlparse
-import twatter
 import urllib
 import struct
 import socket
@@ -25,6 +24,9 @@ import json
 import cgi
 import re
 import os
+
+import twits
+
 
 # dang why doesn't this exist anywhere already
 controlEquivalents = dict((i, unichr(0x2400 + i)) for i in xrange(0x20))
@@ -217,7 +219,7 @@ class HTTPToDCCAdapter(protocol.Factory):
 
 class TheresaProtocol(_IRCBase):
     _lastURL = None
-    lastTwatID = None
+    lastTwitID = None
     channel = None
     channels = None
 
@@ -236,18 +238,18 @@ class TheresaProtocol(_IRCBase):
         self.join(','.join(self.channels))
         _IRCBase.signedOn(self)
 
-    def formatTwat(self, twat):
-        self.lastTwatID = twat['id']
-        self.lastTwatUser = twat['user']['screen_name']
+    def formatTwit(self, twit):
+        self.lastTwitID = twit['id']
+        self.lastTwitUser = twit['user']['screen_name']
         return ' '.join([
                 c(' Twitter ', WHITE, CYAN),
-                b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
-                escapeControls(twatter.extractRealTwatText(twat))])
+                b('@%s:' % (escapeControls(twit['user']['screen_name']),)),
+                escapeControls(twits.extractRealTwitText(twit))])
 
-    def fetchFormattedTwat(self, id):
-        return (self.factory.twatter
+    def fetchFormattedTwit(self, id):
+        return (self.factory.twits
                 .request('statuses/show.json', id=id, include_entities='true')
-                .addCallback(self.formatTwat))
+                .addCallback(self.formatTwit))
 
     def fetchURLInfo(self, url, fullInfo=False):
         d = urlInfo(self.factory.agent, url, fullInfo=fullInfo)
@@ -295,7 +297,7 @@ class TheresaProtocol(_IRCBase):
             url = m.group(0)
             twitter_match = twitter_regexp.search(url)
             if twitter_match:
-                scannedDeferreds.append(self.fetchFormattedTwat(twitter_match.group(1)))
+                scannedDeferreds.append(self.fetchFormattedTwit(twitter_match.group(1)))
                 continue
             if not url.startswith(('http://', 'https://')):
                 url = 'http://' + url
@@ -349,16 +351,14 @@ class TheresaProtocol(_IRCBase):
         for channel in channels:
             self.msg(channel, message)
 
-    def command_twat(self, channel, user):
-        return (self.factory.twatter
+    def command_twit(self, channel, user):
+        return (self.factory.twits
                 .request('statuses/user_timeline.json',
                          screen_name=user, count='1', include_entities='true',
                          include_rts='true', exclude_replies='true')
                 .addCallback(operator.itemgetter(0))
-                .addCallback(self.formatTwat)
+                .addCallback(self.formatTwit)
                 .addCallback(self.messageChannels, [channel]))
-
-    command_twit = command_twat
 
     @defer.inlineCallbacks
     def dccSend(self, resp, nick, size):
@@ -405,53 +405,53 @@ class TheresaProtocol(_IRCBase):
         return ('following @%(screen_name)s: %(following)s' % data).encode('utf-8')
 
     def command_follow(self, channel, user):
-        return (self.factory.twatter
+        return (self.factory.twits
                 .request('friendships/create.json', 'POST',
                          screen_name=user, follow='true')
                 .addCallback(self._extractFollowing)
                 .addCallback(self.messageChannels, [channel]))
 
     def command_unfollow(self, channel, user):
-        return (self.factory.twatter
+        return (self.factory.twits
                 .request('friendships/destroy.json', 'POST', screen_name=user)
                 .addCallback(self._extractFollowing)
                 .addCallback(self.messageChannels, [channel]))
 
     def _extractPostData(self, data, preamble):
-        return ('%s twat ID %s' % (preamble, data['id'])).encode('utf-8')
+        return ('%s twit ID %s' % (preamble, data['id'])).encode('utf-8')
 
     def command_poast(self, channel, *content):
         content = ' '.join(content).decode('utf-8', 'replace')
-        return (self.factory.twatter
+        return (self.factory.twits
                 .request('statuses/update.json', 'POST', status=content)
                 .addCallback(self._extractPostData, 'posted as')
                 .addCallback(self.messageChannels, [channel]))
 
     def command_unpoast(self, channel, id):
-        return (self.factory.twatter
+        return (self.factory.twits
                 .request('statuses/destroy/%s.json' % (id,), 'POST')
                 .addCallback(self._extractPostData, 'deleted')
                 .addCallback(self.messageChannels, [channel]))
 
-    def command_retwat(self, channel, id=None):
+    def command_retwit(self, channel, id=None):
         if id is None:
-            id = self.lastTwatID
+            id = self.lastTwitID
         if id is None:
-            raise ValueError('nothing to retwat')
-        return (self.factory.twatter
+            raise ValueError('nothing to retwit')
+        return (self.factory.twits
                 .request('statuses/retweet/%s.json' % (id,), 'POST')
                 .addCallback(self._extractPostData, 'retweeted as')
                 .addCallback(self.messageChannels, [channel]))
 
     def command_reply(self, channel, *content):
-        if self.lastTwatID is None:
+        if self.lastTwitID is None:
             raise ValueError('nothing to reply to')
         content = ' '.join(content).decode('utf-8', 'replace')
-        if '@' + self.lastTwatUser.lower() not in content.lower():
-            content = '@%s %s' % (self.lastTwatUser, content)
-        return (self.factory.twatter
+        if '@' + self.lastTwitUser.lower() not in content.lower():
+            content = '@%s %s' % (self.lastTwitUser, content)
+        return (self.factory.twits
                 .request('statuses/update.json', 'POST',
-                         status=content, in_reply_to_status_id=self.lastTwatID)
+                         status=content, in_reply_to_status_id=self.lastTwitID)
                 .addCallback(self._extractPostData, 'replied as')
                 .addCallback(self.messageChannels, [channel]))
 
@@ -464,9 +464,9 @@ class TheresaProtocol(_IRCBase):
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self, agent, twatter, tahoe=None, reactor=None):
+    def __init__(self, agent, twits, tahoe=None, reactor=None):
         self.agent = agent
-        self.twatter = twatter
+        self.twits = twits
         self.tahoe = tahoe
         if reactor is None:
             from twisted.internet import reactor
