@@ -167,56 +167,6 @@ class _IRCBase(irc.IRCClient):
                 users.discard(oldname)
                 users.add(newname)
 
-class TahoeReceiver(protocol.Protocol):
-    def __init__(self):
-        self.proto = None
-        self.buffer = []
-        self.received = 0
-        self.initialDeferred = defer.Deferred()
-        self.done = False
-
-    def dataReceived(self, data):
-        if self.proto:
-            self.proto.transport.write(data)
-            return
-        self.buffer.append(data)
-        self.received += len(data)
-        if self.received > 16384:
-            self.transport.pauseProducing()
-            self.initialDeferred.callback(''.join(self.buffer))
-            del self.buffer
-
-    def connectionLost(self, reason):
-        if self.proto:
-            self.proto.transport.loseConnection()
-        else:
-            self.initialDeferred.callback(''.join(self.buffer))
-        self.done = True
-
-class HTTPToDCCAdapterProtocol(protocol.Protocol):
-    def connectionMade(self):
-        self.factory.canceler.cancel()
-        self.transport.write(self.factory.initial)
-        if self.factory.receiver.done:
-            self.transport.loseConnection()
-        else:
-            self.factory.receiver.proto = self
-            self.factory.receiver.transport.resumeProducing()
-
-    def connectionLost(self, reason):
-        if not self.factory.receiver.done:
-            self.factory.receiver.transport.stopProducing()
-        self.factory.deferred.callback(None)
-
-class HTTPToDCCAdapter(protocol.Factory):
-    protocol = HTTPToDCCAdapterProtocol
-
-    def __init__(self, initial, receiver, reactor):
-        self.initial = initial
-        self.receiver = receiver
-        self.deferred = defer.Deferred()
-        self.canceler = reactor.callLater(60, self.deferred.callback, None)
-
 class TheresaProtocol(_IRCBase):
     _lastURL = None
     lastTwitID = None
@@ -227,8 +177,6 @@ class TheresaProtocol(_IRCBase):
     versionName = 'theresa'
     versionNum = 'HEAD'
     versionEnv = 'twisted'
-
-    dccIP = '127.0.0.1'
 
     def __init__(self):
         if self.channels is None:
@@ -359,47 +307,6 @@ class TheresaProtocol(_IRCBase):
                 .addCallback(operator.itemgetter(0))
                 .addCallback(self.formatTwit)
                 .addCallback(self.messageChannels, [channel]))
-
-    @defer.inlineCallbacks
-    def dccSend(self, resp, nick, size):
-        receiver = TahoeReceiver()
-        resp.deliverBody(receiver)
-        initial = yield receiver.initialDeferred
-        ext = mimetypes.guess_extension(magic.from_buffer(initial, mime=True)) or '.dat'
-        name = os.urandom(4).encode('hex') + ext
-
-        log.msg('starting to send %s to %s' % (name, nick))
-        factory = HTTPToDCCAdapter(initial, receiver, self.factory.reactor)
-        endpoint = endpoints.TCP4ServerEndpoint(self.factory.reactor, 0)
-        port = yield endpoint.listen(factory)
-
-        packedIP, = struct.unpack('!L', socket.inet_aton(self.dccIP))
-        args = 'SEND %s %s %s %s' % (name, packedIP, port.getHost().port, size)
-        self.ctcpMakeQuery(nick, [('DCC', args)])
-
-        yield factory.deferred
-        port.stopListening()
-        log.msg('done sending %s to %s' % (name, nick))
-
-    @defer.inlineCallbacks
-    def command_dongcc(self, channel, user, cap):
-        if not self.factory.tahoe:
-            return
-        nick, _, host = user.partition('!')
-        capurl = self.factory.tahoe + urllib.quote(cap)
-        d = self.factory.agent.request('GET', capurl + '?t=json')
-        d.addCallback(receive, StringReceiver())
-        d.addCallback(json.loads)
-        info = yield d
-        if info[0] == 'dirnode':
-            raise ValueError("you can't request a directory (yet).")
-        elif info[0] != 'filenode':
-            raise ValueError("that's not a valid CAP!")
-        self.msg(channel, '%s: boioioioioing' % (nick,))
-
-        d = self.factory.agent.request('GET', capurl)
-        d.addCallback(self.dccSend, nick, info[1]['size'])
-        yield d
 
     def _extractFollowing(self, data):
         return ('following @%(screen_name)s: %(following)s' % data).encode('utf-8')
