@@ -1,48 +1,25 @@
 # Copyright (c) Aaron Gallagher <_@habnab.it>
 # See COPYING for details.
 
+from twisted.application.internet import TimerService
+from twisted.application import service
 from twisted.internet.error import ConnectionDone, ConnectionLost
-from twisted.internet import protocol, defer, endpoints
+from twisted.internet import protocol, defer
 from twisted.python import log
 from twisted.web.client import ResponseDone, ResponseFailed
 from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
-from lxml import html
-import magic
-
 import collections
-import mimetypes
-import traceback
-import operator
-import urlparse
-import urllib
-import struct
-import socket
-import shlex
+import itertools
 import json
-import cgi
+import posixpath
+import shlex
 import re
-import os
+import urlparse
 
-import twits
+import youporn
 
-
-# dang why doesn't this exist anywhere already
-controlEquivalents = dict((i, unichr(0x2400 + i)) for i in xrange(0x20))
-controlEquivalents[0x7f] = u'\u2421'
-def escapeControls(s):
-    return unicode(s).translate(controlEquivalents).encode('utf-8')
-
-def b(text):
-    return '\x02%s\x02' % (text,)
-def c(text, *colors):
-    return '\x03%s%s\x03' % (','.join(colors), text)
-(WHITE, BLACK, NAVY, GREEN, RED, BROWN, PURPLE, ORANGE, YELLOW, LME, TEAL,
- CYAN, VLUE, PINK, GREY, SILVER) = (str(i) for i in range(16))
-
-twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
-gyazo_regexp = re.compile('https?://gyazo\.com/[0-9a-f]+')
 
 class StringReceiver(protocol.Protocol):
     def __init__(self, byteLimit=None):
@@ -66,67 +43,11 @@ class StringReceiver(protocol.Protocol):
         else:
             self.deferred.errback(reason)
 
+
 def receive(response, receiver):
     response.deliverBody(receiver)
     return receiver.deferred
 
-redirectsToFollow = set((301, 302, 303, 307))
-@defer.inlineCallbacks
-def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
-    results = [url]
-    try:
-        for _ in xrange(redirectFollowCount):
-            resp = yield agent.request('GET', url)
-            if resp.code in redirectsToFollow:
-                url = resp.headers.getRawHeaders('location')[0]
-                results.append('%d: %s' % (resp.code, url))
-                continue
-            elif resp.code == 200:
-                content_type, params = cgi.parse_header(resp.headers.getRawHeaders('content-type')[0])
-                result = '%d: %s' % (resp.code, content_type)
-                if content_type == 'text/html':
-                    body = yield receive(resp, StringReceiver(4096))
-                    if 'charset' in params:
-                        body = body.decode(params['charset'].strip('"\''), 'replace')
-                    doc = html.fromstring(body)
-                    title_nodes = doc.xpath('//title/text()')
-                    if title_nodes:
-                        title = ' '.join(title_nodes[0].split())
-                        if not fullInfo:
-                            defer.returnValue(title)
-                        result = '%s -- %s' % (result, title)
-                results.append(result)
-                break
-            else:
-                results.append(str(resp.code))
-                break
-    except Exception:
-        log.err(None, 'error in URL info for %r' % (url,))
-        results.append(traceback.format_exc(limit=0).splitlines()[-1])
-    if not fullInfo:
-        defer.returnValue(None)
-    defer.returnValue(' => '.join(results))
-
-@defer.inlineCallbacks
-def gyazoImage(agent, url):
-    resp = yield agent.request('GET', url)
-    if resp.code != 200:
-        log.msg('non-200 (%d) response from %r' % (resp.code, url))
-        return
-    body = yield receive(resp, StringReceiver(16384))
-    doc = html.fromstring(body)
-    image, = doc.xpath('//img[@id="gyazo_img"]/@src')
-    defer.returnValue(urlparse.urljoin(url, image))
-
-urlRegex = re.compile(
-    u'(?isu)(\\b(?:https?://|www\\d{0,3}[.]|[a-z0-9.\\-]+[.][a-z]{2,4}/)[^\\s()<'
-    u'>\\[\\]]+[^\\s`!()\\[\\]{};:\'".,<>?\xab\xbb\u201c\u201d\u2018\u2019])'
-)
-
-tahoeRegex = re.compile(
-    '(URI:(?:(?:CHK|DIR2(?:-MDMF)?(?:-(?:CHK|LIT|RO))?|LIT|(?:SSK|MDMF)(?:-RO)'
-    '?):)[A-Za-z0-9:]+)'
-)
 
 class _IRCBase(irc.IRCClient):
     def ctcpQuery(self, user, channel, messages):
@@ -136,9 +57,13 @@ class _IRCBase(irc.IRCClient):
     def noticed(self, user, channel, message):
         pass
 
+    def connectionLost(self, reason):
+        self.factory.unestablished()
+
     def signedOn(self):
         self.channelUsers = collections.defaultdict(set)
         self.nickPrefixes = ''.join(prefix for prefix, _ in self.supported.getFeature('PREFIX').itervalues())
+        self.factory.established(self)
 
     def irc_RPL_NAMREPLY(self, prefix, params):
         channel = params[2].lower()
@@ -167,6 +92,7 @@ class _IRCBase(irc.IRCClient):
                 users.discard(oldname)
                 users.add(newname)
 
+
 class TheresaProtocol(_IRCBase):
     _lastURL = None
     lastTwitID = None
@@ -186,84 +112,8 @@ class TheresaProtocol(_IRCBase):
         self.join(','.join(self.channels))
         _IRCBase.signedOn(self)
 
-    def formatTwit(self, twit):
-        self.lastTwitID = twit['id']
-        self.lastTwitUser = twit['user']['screen_name']
-        return ' '.join([
-                c(' Twitter ', WHITE, CYAN),
-                b('@%s:' % (escapeControls(twit['user']['screen_name']),)),
-                escapeControls(twits.extractRealTwitText(twit))])
-
-    def fetchFormattedTwit(self, id):
-        return (self.factory.twits
-                .request('statuses/show.json', id=id, include_entities='true')
-                .addCallback(self.formatTwit))
-
-    def fetchURLInfo(self, url, fullInfo=False):
-        d = urlInfo(self.factory.agent, url, fullInfo=fullInfo)
-        @d.addCallback
-        def _cb(r):
-            if r is not None:
-                return c(' Page title ', WHITE, NAVY) + ' ' + b(escapeControls(r))
-        self._lastURL = url
-        return d
-
-    def fetchGyazoImage(self, url):
-        d = gyazoImage(self.factory.agent, url)
-        @d.addCallback
-        def _cb(r):
-            if r is not None:
-                return c(' Gyazo ', WHITE, NAVY) + ' ' + b(escapeControls(r))
-        return d
-
-    def _formatTahoe(self, data):
-        results = data['results']
-        results['healthy'] = 'healthy' if results['healthy'] else 'unhealthy'
-        results['recoverable'] = 'recoverable' if results['recoverable'] else 'unrecoverable'
-        message = (
-            '{0[healthy]}; {0[recoverable]}; {0[count-shares-needed]}-of-'
-            '{0[count-shares-expected]} encoded; {0[count-shares-good]} shares '
-            'available across {0[count-good-share-hosts]} hosts'
-        ).format(results)
-        return c(' Tahoe-LAFS ', WHITE, CYAN) + ' ' + message.encode()
-
-    def _scanTahoe(self, message):
-        if not self.factory.tahoe:
-            return
-        for m in tahoeRegex.finditer(message):
-            uri = m.group()
-            d = self.factory.agent.request(
-                'POST', self.factory.tahoe + urllib.quote(uri) + '?t=check&output=json')
-            d.addCallback(receive, StringReceiver())
-            d.addCallback(json.loads)
-            d.addCallback(self._formatTahoe)
-            yield d
-
     def scanMessage(self, channel, message):
-        scannedDeferreds = []
-        for m in urlRegex.finditer(message):
-            url = m.group(0)
-            twitter_match = twitter_regexp.search(url)
-            if twitter_match:
-                scannedDeferreds.append(self.fetchFormattedTwit(twitter_match.group(1)))
-                continue
-            if not url.startswith(('http://', 'https://')):
-                url = 'http://' + url
-            if gyazo_regexp.match(url):
-                scannedDeferreds.append(self.fetchGyazoImage(url))
-                continue
-            scannedDeferreds.append(self.fetchURLInfo(url))
-        scannedDeferreds.extend(self._scanTahoe(message))
-        scannedDeferreds = [d.addErrback(log.err) for d in scannedDeferreds if d]
-        if not scannedDeferreds:
-            return
-        d = defer.gatherResults(scannedDeferreds, consumeErrors=True)
-        @d.addCallback
-        def _cb(results):
-            result = u' \xa6 '.encode('utf-8').join(result for result in results if result is not None)
-            if result is not None:
-                self.msg(channel, result)
-        return d
+        pass
 
     def personallyAddressed(self, user, channel, message):
         pass
@@ -289,92 +139,122 @@ class TheresaProtocol(_IRCBase):
                 d = defer.maybeDeferred(meth, channel, user, *params)
             else:
                 d = defer.maybeDeferred(meth, channel, *params)
+
             @d.addErrback
             def _eb(f):
-                self.msg(channel, '%s in %s: %s' % (c(' Error ', YELLOW, RED), command, f.getErrorMessage()))
+                self.msg(channel, 'Error in %s: %s' % (command, f.getErrorMessage()))
                 return f
+
             d.addErrback(log.err)
 
     def messageChannels(self, message, channels):
         for channel in channels:
             self.msg(channel, message)
 
-    def command_twit(self, channel, user):
-        return (self.factory.twits
-                .request('statuses/user_timeline.json',
-                         screen_name=user, count='1', include_entities='true',
-                         include_rts='true', exclude_replies='true')
-                .addCallback(operator.itemgetter(0))
-                .addCallback(self.formatTwit)
-                .addCallback(self.messageChannels, [channel]))
+    def gotWeather(self, weather):
+        self.messageChannels(weather, self.channels)
 
-    def _extractFollowing(self, data):
-        return ('following @%(screen_name)s: %(following)s' % data).encode('utf-8')
+    def command_youporn(self, channel):
+        return (
+            defer.gatherResults([
+                youporn.fetchYoupornComment(),
+                youporn.fetchStockImage(500, 500),
+            ])
+            .addCallback(youporn.overlayYoupornComment)
+            .addCallback(youporn.postToImgur)
+            .addCallback(lambda r: r['data']['link']
+                         .encode()
+                         .replace('http:', 'https:'))
+            .addCallback(self.messageChannels, [channel]))
 
-    def command_follow(self, channel, user):
-        return (self.factory.twits
-                .request('friendships/create.json', 'POST',
-                         screen_name=user, follow='true')
-                .addCallback(self._extractFollowing)
-                .addCallback(self.messageChannels, [channel]))
-
-    def command_unfollow(self, channel, user):
-        return (self.factory.twits
-                .request('friendships/destroy.json', 'POST', screen_name=user)
-                .addCallback(self._extractFollowing)
-                .addCallback(self.messageChannels, [channel]))
-
-    def _extractPostData(self, data, preamble):
-        return ('%s twit ID %s' % (preamble, data['id'])).encode('utf-8')
-
-    def command_poast(self, channel, *content):
-        content = ' '.join(content).decode('utf-8', 'replace')
-        return (self.factory.twits
-                .request('statuses/update.json', 'POST', status=content)
-                .addCallback(self._extractPostData, 'posted as')
-                .addCallback(self.messageChannels, [channel]))
-
-    def command_unpoast(self, channel, id):
-        return (self.factory.twits
-                .request('statuses/destroy/%s.json' % (id,), 'POST')
-                .addCallback(self._extractPostData, 'deleted')
-                .addCallback(self.messageChannels, [channel]))
-
-    def command_retwit(self, channel, id=None):
-        if id is None:
-            id = self.lastTwitID
-        if id is None:
-            raise ValueError('nothing to retwit')
-        return (self.factory.twits
-                .request('statuses/retweet/%s.json' % (id,), 'POST')
-                .addCallback(self._extractPostData, 'retweeted as')
-                .addCallback(self.messageChannels, [channel]))
-
-    def command_reply(self, channel, *content):
-        if self.lastTwitID is None:
-            raise ValueError('nothing to reply to')
-        content = ' '.join(content).decode('utf-8', 'replace')
-        if '@' + self.lastTwitUser.lower() not in content.lower():
-            content = '@%s %s' % (self.lastTwitUser, content)
-        return (self.factory.twits
-                .request('statuses/update.json', 'POST',
-                         status=content, in_reply_to_status_id=self.lastTwitID)
-                .addCallback(self._extractPostData, 'replied as')
-                .addCallback(self.messageChannels, [channel]))
-
-    def command_url(self, channel, url=None):
-        if url is None:
-            url = self._lastURL
-        return (self.fetchURLInfo(url, fullInfo=True)
-                .addCallback(self.messageChannels, [channel]))
 
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self, agent, twits, tahoe=None, reactor=None):
+    def __init__(self, agent, reactor=None):
         self.agent = agent
-        self.twits = twits
-        self.tahoe = tahoe
         if reactor is None:
             from twisted.internet import reactor
         self.reactor = reactor
+        self._waiting = []
+
+    def established(self, protocol):
+        self._client = protocol
+        waiting, self._waiting = self._waiting, []
+        for d in waiting:
+            d.callback(protocol)
+        self.resetDelay()
+
+    def unestablished(self):
+        self._client = None
+
+    def clientDeferred(self):
+        if self._client is not None:
+            return defer.succeed(self._client)
+        d = defer.Deferred()
+        self._waiting.append(d)
+        return d
+
+
+class WeatherService(service.MultiService):
+    def __init__(self, agent, target, api_key, zip_code, interval=120):
+        service.MultiService.__init__(self)
+        self.agent = agent
+        self.target = target
+        self.url = lambda api: urlparse.urljoin(
+            'http://api.wunderground.com/api/',
+            posixpath.join(api_key, api, 'q', str(zip_code) + '.json'))
+        self.timer = TimerService(interval, self._doPoll)
+        self.timer.setServiceParent(self)
+        self.lastUpdate = None
+
+    def poll(self):
+        self._doPoll(force=True)
+
+    def _doPoll(self, force=False):
+        d = self._actuallyDoPoll(force)
+        d.addErrback(log.err)
+        return d
+
+    @defer.inlineCallbacks
+    def _actuallyDoPoll(self, force):
+        resp = yield self.agent.request('GET', self.url('conditions'))
+        body = yield receive(resp, StringReceiver())
+        j = json.loads(body)['current_observation']
+        weather = j['weather'].lower()
+        if 'cloud' in weather or weather == 'overcast':
+            updateKey = False
+        else:
+            updateKey = weather
+        if self.lastUpdate is None:
+            self.lastUpdate = updateKey
+            return
+        if updateKey == self.lastUpdate and not force:
+            return
+        self.lastUpdate = updateKey
+        updateString = (
+            ('temperature %(temperature_string)s; '
+             'feels like %(feelslike_string)s; ' % j)
+            + ('weather: %s' % weather))
+        client = yield self.target.clientDeferred()
+        client.gotWeather(updateString.encode('utf-8'))
+
+    @defer.inlineCallbacks
+    def getRainChance(self):
+        resp = yield self.agent.request('GET', self.url('hourly'))
+        body = yield receive(resp, StringReceiver())
+        j = json.loads(body)['hourly_forecast']
+        update = []
+        for weekday, remaining in itertools.groupby(j, lambda i: i['FCTTIME']['weekday_name']):
+            weekdayUpdate = []
+            for pop, forecasts in itertools.groupby(remaining, lambda i: round(float(i['pop']) / 10) * 10):
+                forecasts = list(forecasts)
+                first, last = forecasts[0]['FCTTIME']['hour'], forecasts[-1]['FCTTIME']['hour']
+                if first == last:
+                    weekdayUpdate.append('{}h: {:.0f}%'.format(first, pop))
+                else:
+                    weekdayUpdate.append('{}h-{}h: {:.0f}%'.format(first, last, pop))
+            update.append('{}: {}'.format(weekday, ', '.join(weekdayUpdate)))
+        updateString = '; '.join(update)
+        client = yield self.target.clientDeferred()
+        client.gotWeather(updateString.encode('utf-8'))
